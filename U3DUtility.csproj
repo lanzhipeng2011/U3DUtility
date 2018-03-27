@@ -49,8 +49,12 @@
     <Compile Include="FPController.cs" />
     <Compile Include="FPLook.cs" />
     <Compile Include="LerpControlledBob.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="TopDownController.cs" />
+    <Compile Include="TPController.cs" />
     <Compile Include="UGUIUtils.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Properties\" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
