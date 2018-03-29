@@ -49,6 +49,8 @@
     <Compile Include="FPController.cs" />
     <Compile Include="FPLook.cs" />
     <Compile Include="LerpControlledBob.cs" />
+    <Compile Include="Loom.cs" />
+    <Compile Include="TcpLayer.cs" />
     <Compile Include="TopDownController.cs" />
     <Compile Include="TPController.cs" />
     <Compile Include="UGUIUtils.cs" />
