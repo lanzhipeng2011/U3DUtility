@@ -32,12 +32,16 @@ namespace U3DUtility
         public delegate void OnDisconnectEvent(string msg);
         public delegate void OnRecvEvent(int msgId, byte[] data);
 
-        private TcpClient m_TcpClient = new TcpClient();
+        private TcpClient m_TcpClient;
         private NetworkStream m_NetStream = null;
         private bool m_IsConnected = false;
         private OnConnectEvent m_OnConnect;
         private OnDisconnectEvent m_OnDisConnect;
         private OnRecvEvent m_OnRecvPackage;
+        private string m_IP;
+        private int m_Port;
+        private int m_SendBuffSize = 10240;
+        private int m_RecvBuffSize = 10240;
 
         private Queue<Pkt> m_RecvPacks = new Queue<Pkt>();
 
@@ -49,7 +53,9 @@ namespace U3DUtility
             {
                 if (m_Singleton == null)
                 {
-                    GameObject o = new GameObject();
+                    Loom.Initialize();
+
+                    GameObject o = new GameObject("Tcp Connector");
                     DontDestroyOnLoad(o);
                     m_Singleton = o.AddComponent<TcpLayer>();
                 }
@@ -60,27 +66,68 @@ namespace U3DUtility
 
         public void Init (int recvBuffSize, int sendBuffSize)
         {
-            m_TcpClient.NoDelay = true;
-            m_TcpClient.ReceiveBufferSize = recvBuffSize;
-            m_TcpClient.SendBufferSize = sendBuffSize;
+            m_SendBuffSize = sendBuffSize;
+            m_RecvBuffSize = recvBuffSize;
         }
 
         public void Connect(string ip, int port, OnConnectEvent connEvent, OnDisconnectEvent disconnEvent, OnRecvEvent recvEvent)
         {
+            if (m_IsConnected)
+            {
+                Disconnect("reconnect");
+            }
+
             m_OnConnect = connEvent;
             m_OnDisConnect = disconnEvent;
             m_OnRecvPackage = recvEvent;
+            m_IP = ip;
+            m_Port = port;
+
+            m_TcpClient = new TcpClient
+            {
+                NoDelay = true,
+                ReceiveBufferSize = m_RecvBuffSize,
+                SendBufferSize = m_SendBuffSize
+            };
 
             m_IsConnected = false;
             m_TcpClient.BeginConnect(IPAddress.Parse(ip), port, new AsyncCallback(OnConnectCallback), m_TcpClient);
         }
 
-        public void Disconnect()
+        public void Reconnect()
+        {
+            if (m_IsConnected)
+            {
+                Disconnect("reconnect");
+            }
+
+            m_TcpClient = new TcpClient
+            {
+                NoDelay = true,
+                ReceiveBufferSize = m_RecvBuffSize,
+                SendBufferSize = m_SendBuffSize
+            };
+
+            m_TcpClient.BeginConnect(IPAddress.Parse(m_IP), m_Port, new AsyncCallback(OnConnectCallback), m_TcpClient);
+        }
+
+        public void Disconnect(string msg)
         {
             if (m_IsConnected)
             {
                 m_NetStream.Close();
                 m_TcpClient.Close();
+                m_IsConnected = false;
+
+                if (m_OnDisConnect != null)
+                {
+                    m_OnDisConnect(msg);
+                }
+
+                lock (m_RecvPacks)
+                {
+                    m_RecvPacks.Clear();
+                }
             }
         }
 
@@ -101,6 +148,8 @@ namespace U3DUtility
             byte[] sendBytes = dataStream.GetBuffer();
 
             m_NetStream.Write(sendBytes, 0, length);
+
+            //Debug.Log("SendPack");
         }
 
         void OnConnectCallback(IAsyncResult asyncResult)
@@ -137,11 +186,6 @@ namespace U3DUtility
 
         void Update()
         {
-            if (!m_IsConnected)
-            {
-                return;
-            }
-
             //处理所有接收的包
             lock(m_RecvPacks)
             {
@@ -170,18 +214,33 @@ namespace U3DUtility
                     int packLen = new BinaryReader(new MemoryStream(head_data.buff)).ReadInt32();
                     short msgID = new BinaryReader(new MemoryStream(head_data.buff, PACK_HEAD_SIZE, MSG_ID_SIZE)).ReadInt16();
 
-                    AsyncData pack_data = new AsyncData
-                    {
-                        buff = new byte[packLen],
-                        pos = 0,
-                        messId = msgID
-                    };
+                    //Debug.LogFormat("recv head {0} {1} {2}", dataLen, packLen, msgID);
 
-                    m_NetStream.BeginRead(pack_data.buff, 0, pack_data.buff.Length, new AsyncCallback(ReadAsyncCallBackPack), pack_data);
+                    if (packLen == MSG_ID_SIZE)
+                    {
+                        BeginPackRead();
+                    }
+                    else if (packLen < MSG_ID_SIZE)
+                    {
+                        throw new Exception("recv pack len " + packLen);
+                    }
+                    else
+                    {
+                        AsyncData pack_data = new AsyncData
+                        {
+                            buff = new byte[packLen - MSG_ID_SIZE],
+                            pos = 0,
+                            messId = msgID
+                        };
+
+                        m_NetStream.BeginRead(pack_data.buff, 0, pack_data.buff.Length, new AsyncCallback(ReadAsyncCallBackPack), pack_data);
+                    }
                 }
                 else //没读取完则继续读取
                 {
                     head_data.pos += dataLen;
+
+                    Debug.LogFormat("continue recv head {0} {1}", head_data.buff.Length, head_data.pos);
 
                     m_NetStream.BeginRead(head_data.buff, head_data.pos, head_data.buff.Length - head_data.pos, new AsyncCallback(ReadAsyncCallBackPackHead), head_data);
                 }
@@ -190,16 +249,7 @@ namespace U3DUtility
             {
                 U3DUtility.Loom.QueueOnMainThread(() =>
                 {
-                    Disconnect();
-
-                    U3DUtility.Loom.QueueOnMainThread(() =>
-                    {
-                        if (m_OnDisConnect != null)
-                        {
-                            m_IsConnected = false;
-                            m_OnDisConnect(ex.ToString());
-                        }
-                    });
+                    Disconnect(ex.ToString());
                 });
 
                 return;
@@ -222,6 +272,8 @@ namespace U3DUtility
 
                     lock(m_RecvPacks)
                     {
+                        //Debug.LogFormat("recv data {0} {1}", data.buff.Length, p.messId);
+
                         m_RecvPacks.Enqueue(p);
                     }
 
@@ -231,23 +283,16 @@ namespace U3DUtility
                 {
                     data.pos += dataLen;
 
-                    m_NetStream.BeginRead(data.buff, data.pos, data.buff.Length - data.pos, new AsyncCallback(ReadAsyncCallBackPackHead), data);
+                    Debug.LogFormat("continue recv data {0} {1}", data.buff.Length, data.pos);
+
+                    m_NetStream.BeginRead(data.buff, data.pos, data.buff.Length - data.pos, new AsyncCallback(ReadAsyncCallBackPack), data);
                 }
             }
             catch (Exception ex)
             {
                 U3DUtility.Loom.QueueOnMainThread(() =>
                 {
-                    Disconnect();
-
-                    U3DUtility.Loom.QueueOnMainThread(() =>
-                    {
-                        if (m_OnDisConnect != null)
-                        {
-                            m_IsConnected = false;
-                            m_OnDisConnect(ex.ToString());
-                        }
-                    });
+                    Disconnect(ex.ToString());
                 });
             }
         }
@@ -259,7 +304,18 @@ namespace U3DUtility
                 buff = new byte[PACK_HEAD_SIZE + MSG_ID_SIZE],
                 pos = 0
             };
-            m_NetStream.BeginRead(data.buff, 0, data.buff.Length, new AsyncCallback(ReadAsyncCallBackPackHead), data);
+
+            try
+            {
+                m_NetStream.BeginRead(data.buff, 0, data.buff.Length, new AsyncCallback(ReadAsyncCallBackPackHead), data);
+            }
+            catch (Exception ex)
+            {
+                U3DUtility.Loom.QueueOnMainThread(() =>
+                {
+                    Disconnect(ex.ToString());
+                });
+            }
         }
 
     }
