@@ -48,12 +48,15 @@
     <Compile Include="FOVKick.cs" />
     <Compile Include="FPController.cs" />
     <Compile Include="FPLook.cs" />
+    <Compile Include="IdxFile.cs" />
     <Compile Include="LerpControlledBob.cs" />
     <Compile Include="Loom.cs" />
+    <Compile Include="ResManager.cs" />
     <Compile Include="TcpLayer.cs" />
     <Compile Include="TopDownController.cs" />
     <Compile Include="TPController.cs" />
     <Compile Include="UGUIUtils.cs" />
+    <Compile Include="UpdateManager.cs" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Properties\" />
