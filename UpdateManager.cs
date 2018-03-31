@@ -276,7 +276,8 @@ namespace U3DUtility
                     text = assetObj as TextAsset;
                     if (text)
                     {
-                        m_LuaTables[text.name] = text.bytes;
+                        string name = text.name.Remove(text.name.LastIndexOf('.'));
+                        m_LuaTables[name] = text.bytes;
                     }
                 }
             }
@@ -286,34 +287,17 @@ namespace U3DUtility
             yield return null;
         }
 
-        public byte[] GetLuaBytes(string name)
+        internal byte[] GetLuaBytes(string name)
         {
-            name = name.Replace(".", "/");
-
-            if (Application.isMobilePlatform)
+            var subName = name.Substring(name.LastIndexOf('/') + 1);
+            if (m_LuaTables.ContainsKey(subName))
             {
-                var subName = name.Substring(name.LastIndexOf('/') + 1);
-                if (m_LuaTables.ContainsKey(subName))
-                {
-                    return m_LuaTables[subName];
-                }
-
-                if (m_LuaTables.ContainsKey(name))
-                {
-                    return m_LuaTables[name];
-                }
+                return m_LuaTables[subName];
             }
-            else
+
+            if (m_LuaTables.ContainsKey(name))
             {
-                try
-                {
-                    var fileInfo = File.ReadAllText(Application.dataPath + "/Resources/" + name + ".lua");
-                    return Encoding.UTF8.GetBytes(fileInfo);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("editor not find lua file: " + name + e.ToString());
-                }
+                return m_LuaTables[name];
             }
 
             return null;

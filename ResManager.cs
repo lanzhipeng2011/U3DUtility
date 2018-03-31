@@ -62,6 +62,43 @@ namespace U3DUtility
         static Dictionary<string, string[]> m_Dependencies = new Dictionary<string, string[]>();
         string[] m_Variants = { };
 
+        static ResManager m_Singleton;
+        public static ResManager Singleton
+        {
+            get
+            {
+                if (m_Singleton == null)
+                {
+                    m_Singleton = new ResManager();
+                }
+
+                return m_Singleton;
+            }
+        }
+
+        public byte[] GetLuaBytes(string name)
+        {
+            name = name.Replace(".", "/");
+            if (Application.isMobilePlatform)
+            {
+                return UpdateManager.Singleton.GetLuaBytes(name);
+            }
+            else
+            {
+                try
+                {
+                    var fileInfo = File.ReadAllText(Application.dataPath + "/Lua/" + name + ".lua.txt");
+                    return Encoding.UTF8.GetBytes(fileInfo);
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError("editor not find lua file: " + name + e.ToString());
+                }
+            }
+
+            return null;
+        }
+
         /// <summary>
         /// 动态加载资源统一接口，如果从bundle里读取不到则从本地包中读取
         /// </summary>
@@ -76,14 +113,15 @@ namespace U3DUtility
                 return null;
             }
 
-            UnityEngine.Object obj = LoadAssetFromBundle(assetPath, type);
-            if (obj == null)
+            if (Application.isMobilePlatform)
+            {
+                return LoadAssetFromBundle(assetPath, type);
+            }
+            else
             {
                 string path = assetPath.Remove(assetPath.LastIndexOf('.'));
                 return Resources.Load(path);
             }
-
-            return null;
         }
 
         /// <summary>
