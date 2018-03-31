@@ -91,7 +91,22 @@ namespace U3DUtility
             };
 
             m_IsConnected = false;
-            m_TcpClient.BeginConnect(IPAddress.Parse(ip), port, new AsyncCallback(OnConnectCallback), m_TcpClient);
+
+            try
+            {
+                m_TcpClient.BeginConnect(IPAddress.Parse(ip), port, new AsyncCallback(OnConnectCallback), m_TcpClient);
+
+                Invoke("ConnectTimeOutCheck", 3);
+            }
+            catch (Exception ex)
+            {
+                if (IsInvoking("ConnectTimeOutCheck"))
+                {
+                    CancelInvoke("ConnectTimeOutCheck");
+                }
+
+                m_OnConnect?.Invoke(false, ex.ToString());
+            }
         }
 
         public void Reconnect()
@@ -108,7 +123,21 @@ namespace U3DUtility
                 SendBufferSize = m_SendBuffSize
             };
 
-            m_TcpClient.BeginConnect(IPAddress.Parse(m_IP), m_Port, new AsyncCallback(OnConnectCallback), m_TcpClient);
+            try
+            {
+                m_TcpClient.BeginConnect(IPAddress.Parse(m_IP), m_Port, new AsyncCallback(OnConnectCallback), m_TcpClient);
+
+                Invoke("ConnectTimeOutCheck", 3);
+            }
+            catch (Exception ex)
+            {
+				if (IsInvoking("ConnectTimeOutCheck"))
+                {
+                    CancelInvoke("ConnectTimeOutCheck");
+                }
+				
+                m_OnConnect?.Invoke(false, ex.ToString());
+            }
         }
 
         public void Disconnect(string msg)
@@ -119,10 +148,7 @@ namespace U3DUtility
                 m_TcpClient.Close();
                 m_IsConnected = false;
 
-                if (m_OnDisConnect != null)
-                {
-                    m_OnDisConnect(msg);
-                }
+                m_OnDisConnect?.Invoke(msg);
 
                 lock (m_RecvPacks)
                 {
@@ -147,9 +173,14 @@ namespace U3DUtility
 
             byte[] sendBytes = dataStream.GetBuffer();
 
-            m_NetStream.Write(sendBytes, 0, length);
-
-            //Debug.Log("SendPack");
+            try
+            {
+                m_NetStream.Write(sendBytes, 0, length);
+            }
+            catch (Exception ex)
+            {
+                Disconnect(ex.ToString());
+            }
         }
 
         void OnConnectCallback(IAsyncResult asyncResult)
@@ -178,6 +209,11 @@ namespace U3DUtility
 
                 U3DUtility.Loom.QueueOnMainThread(() =>
                 {
+                    if (IsInvoking("ConnectTimeOutCheck"))
+                    {
+                        CancelInvoke("ConnectTimeOutCheck");
+                    }
+
                     m_IsConnected = true;
                     m_OnConnect?.Invoke(true, "");
                 });
@@ -194,6 +230,14 @@ namespace U3DUtility
                     var pkt = m_RecvPacks.Dequeue();
                     m_OnRecvPackage?.Invoke(pkt.messId, pkt.data);
                 }
+            }
+        }
+
+        void ConnectTimeOutCheck()
+        {
+            if (!m_IsConnected)
+            {
+                m_OnConnect?.Invoke(false, "connect time out");
             }
         }
 
