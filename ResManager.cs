@@ -57,12 +57,17 @@ namespace U3DUtility
     /// </summary>
     public class ResManager
     {
-
         AssetBundleManifest m_AssetBundleManifest;
         Dictionary<string, AssetBundle> m_LoadedAssetBundles = new Dictionary<string, AssetBundle>();
         static Dictionary<string, string[]> m_Dependencies = new Dictionary<string, string[]>();
         string[] m_Variants = { };
 
+        /// <summary>
+        /// 动态加载资源统一接口，如果从bundle里读取不到则从本地包中读取
+        /// </summary>
+        /// <param name="assetPath">资源路径，相对于Resources目录</param>
+        /// <param name="type"></param>
+        /// <returns></returns>
         public UnityEngine.Object LoadAsset(string assetPath, System.Type type)
         {
             assetPath = CheckAssetPath(assetPath, type);
@@ -71,15 +76,29 @@ namespace U3DUtility
                 return null;
             }
 
-            if (Application.isMobilePlatform)
+            UnityEngine.Object obj = LoadAssetFromBundle(assetPath, type);
+            if (obj == null)
             {
-                return LoadAssetFromBundle(assetPath, type);
-            }
-            else
-            {
-                string path = "Assets/Packages/" + assetPath;
+                string path = assetPath.Remove(assetPath.LastIndexOf('.'));
                 return Resources.Load(path);
             }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 切换场景时可以卸载所有的资源
+        /// </summary>
+        public void CleanAllAsset()
+        {
+            foreach (var v in m_LoadedAssetBundles)
+            {
+                v.Value.Unload(false);
+            }
+
+            m_LoadedAssetBundles.Clear();
+
+            Resources.UnloadUnusedAssets();
         }
 
         string CheckAssetPath(string assetPath, System.Type type)
