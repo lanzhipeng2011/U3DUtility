@@ -109,6 +109,16 @@ namespace U3DUtility
             }
         }
 
+        public void AddRecvEvent (OnRecvEvent recvEvent)
+        {
+            m_OnRecvPackage += recvEvent;
+        }
+
+        public void RemoveRecvEvent(OnRecvEvent recvEvent)
+        {
+            m_OnRecvPackage -= recvEvent;
+        }
+
         public void Reconnect()
         {
             if (m_IsConnected)
