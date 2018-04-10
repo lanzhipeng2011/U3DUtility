@@ -300,6 +300,12 @@ namespace U3DUtility
                 return m_LuaTables[name];
             }
 
+            TextAsset txtAsset = Resources.Load<TextAsset>("Lua/" + name + ".lua");
+            if (txtAsset != null)
+            {
+                return txtAsset.bytes;
+            }
+
             return null;
         }
     }

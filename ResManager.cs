@@ -85,14 +85,10 @@ namespace U3DUtility
             }
             else
             {
-                try
+                TextAsset txtAsset = Resources.Load<TextAsset>("Lua/" + name + ".lua");
+                if (txtAsset != null)
                 {
-                    var fileInfo = File.ReadAllText(Application.dataPath + "/Lua/" + name + ".lua.txt");
-                    return Encoding.UTF8.GetBytes(fileInfo);
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError("editor not find lua file: " + name + e.ToString());
+                    return txtAsset.bytes;
                 }
             }
 
@@ -115,13 +111,15 @@ namespace U3DUtility
 
             if (Application.isMobilePlatform)
             {
-                return LoadAssetFromBundle(assetPath, type);
+                UnityEngine.Object obj = LoadAssetFromBundle(assetPath, type);
+                if (obj != null)
+                {
+                    return obj;
+                }
             }
-            else
-            {
-                string path = assetPath.Remove(assetPath.LastIndexOf('.'));
-                return Resources.Load(path);
-            }
+
+            string path = assetPath.Remove(assetPath.LastIndexOf('.'));
+            return Resources.Load(path);
         }
 
         /// <summary>
@@ -187,7 +185,16 @@ namespace U3DUtility
             if (m_AssetBundleManifest == null)
             {
                 AssetBundle manifestBundle = AssetBundle.LoadFromFile(DataPath + ResUtils.BundleName);
+                if (manifestBundle == null)
+                {
+                    return null;
+                }
+
                 m_AssetBundleManifest = manifestBundle.LoadAsset("AssetBundleManifest", typeof(AssetBundleManifest)) as AssetBundleManifest;
+                if (m_AssetBundleManifest == null)
+                {
+                    return null;
+                }
             }
 
             string assetName = assetPath.Substring(assetPath.LastIndexOf("/") + 1).ToLower();
@@ -254,7 +261,7 @@ namespace U3DUtility
             }
         }
 
-        public AssetBundle LoadAssetBundle(string assetBundleName)
+        private AssetBundle LoadAssetBundle(string assetBundleName)
         {
             assetBundleName = RemapVariantName(assetBundleName);
 
