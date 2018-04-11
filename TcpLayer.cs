@@ -337,7 +337,7 @@ namespace U3DUtility
                 {
                     data.pos += dataLen;
 
-                    Debug.LogFormat("continue recv data {0} {1}", data.buff.Length, data.pos);
+                    //Debug.LogFormat("continue recv data {0} {1}", data.buff.Length, data.pos);
 
                     m_NetStream.BeginRead(data.buff, data.pos, data.buff.Length - data.pos, new AsyncCallback(ReadAsyncCallBackPack), data);
                 }
