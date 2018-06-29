@@ -10,198 +10,185 @@ namespace U3DUtility
 {
     public class UpdateManager : MonoBehaviour
     {
-        private sealed class AssetBundleInfo
+        enum UpdateStage
         {
-            public readonly AssetBundle m_AssetBundle;
-            public int m_ReferencedCount;
-
-            public AssetBundleInfo(AssetBundle assetBundle)
-            {
-                m_AssetBundle = assetBundle;
-                m_ReferencedCount = 1;
-            }
+            CheckDownloadIndex,
+            Downloading,
+            LoadLuaScript,
         }
 
         public delegate void ProcessCompleteEvent();
 
-        [SerializeField] string m_HttpAddress = "http://169.46.139.57:82/AssetBundles/";
-        [SerializeField] string m_IndexFileName = "list.txt";
+        private UpdateStage mStage = UpdateStage.CheckDownloadIndex;
+        private string mHttpAddress;
+        private static UpdateManager mSingleton;
+        private List<BundleItem> mDownloadingList = new List<BundleItem>();
+        private int mTotalDownloadBytes = 0;
+        private int mCurrentDownloadIdx = 0;
+        private int mAlreadyDownloadBytes = 0;
+        private WWW mWWW = null;
+        private string mNewIndexContent;
+        private Dictionary<string, byte[]> mLuaTables = new Dictionary<string, byte[]>();
+        private ProcessCompleteEvent mAllDoneEvent;
 
-        static UpdateManager m_Singleton;
-        List<BundleItem> m_DownloadingList = new List<BundleItem>();
-        int m_TotalDownloadBytes = 0;
-        int m_CurrentDownloadIdx = 0;
-        int m_AlreadyDownloadBytes = 0;
-        float m_TotalProgess = 0;
-        WWW m_www = null;
-        string m_NewIndexContent;
-        Dictionary<string, byte[]> m_LuaTables = new Dictionary<string, byte[]>();
-
-        public static UpdateManager Singleton
+        public static UpdateManager singleton
         {
             get
             {
-                if (m_Singleton == null)
+                if (mSingleton == null)
                 {
                     GameObject o = new GameObject("Update Manager");
-                    m_Singleton = o.AddComponent<UpdateManager>();
+                    mSingleton = o.AddComponent<UpdateManager>();
                 }
-                return m_Singleton;
+                return mSingleton;
             }
         }
 
-        public float DownloadingProgress
+        /// <summary>
+        /// 获取下载进度
+        /// </summary>
+        public float downloadingProgress
         {
             get
             {
                 int currentBytes = 0;
-                if (m_www != null && m_CurrentDownloadIdx < m_DownloadingList.Count)
+                if (mWWW != null && mCurrentDownloadIdx < mDownloadingList.Count)
                 {
-                    currentBytes = (int)(m_DownloadingList[m_CurrentDownloadIdx].m_FileSize * m_www.progress);
+                    currentBytes = (int)(mDownloadingList[mCurrentDownloadIdx].m_FileSize * mWWW.progress);
                 }
 
-                if (m_TotalDownloadBytes > 0)
+                if (mTotalDownloadBytes > 0)
                 {
-                    return (float)(m_AlreadyDownloadBytes + currentBytes) / (float)m_TotalDownloadBytes;
+                    return (float)(mAlreadyDownloadBytes + currentBytes) / (float)mTotalDownloadBytes;
                 }
-                    
+
                 return 0;
             }
         }
 
-        public float TotalProgress
+        /// <summary>
+        /// 获取热更新进度
+        /// </summary>
+        public float totalProgress
         {
-            get { return m_TotalProgess;  }
+            get
+            {
+                if (mStage == UpdateStage.CheckDownloadIndex)
+                    return 0;
+                else if (mStage == UpdateStage.Downloading)
+                    return 0.1f + downloadingProgress * 0.8f;
+                else if (mStage == UpdateStage.LoadLuaScript)
+                    return 0.9f;
+                else
+                    return 1;
+            }
         }
 
-        public void StartUpdate()
+        /// <summary>
+        /// 开启热更新
+        /// </summary>
+        /// <param name="httpServerIP"></param>
+        public void StartUpdate(string httpServerIP, ProcessCompleteEvent allDoneEv)
         {
-            Debug.Log("start update resource...");
+            Debug.Log("start update resource from " + httpServerIP);
 
-            m_TotalProgess = 0;
+            mHttpAddress = "http://" + httpServerIP + "/" + ResUtils.BundleRootDirName + '/';
+            mAllDoneEvent = allDoneEv;
+            mStage = UpdateStage.CheckDownloadIndex;
 
             StartCoroutine(AsyncCheckDownloadingList(OnCompleteCheckDownloadList));
         }
 
         void OnCompleteCheckDownloadList()
         {
-            m_TotalProgess = 0.1f;
+            mStage = UpdateStage.Downloading;
 
             StartCoroutine(AsyncDownloading(OnCompleteDownloading));
         }
 
         void OnCompleteDownloading()
         {
-            m_TotalProgess = 0.9f;
+            mStage = UpdateStage.LoadLuaScript;
 
             StartCoroutine(AsyncLoadLua(OnCompleteLoadLua));
         }
 
         void OnCompleteLoadLua()
         {
-            m_TotalProgess = 1;
-
             Debug.Log("update resource complete...");
+
+            mAllDoneEvent?.Invoke();
         }
 
-        //从服务器得到资源列表并对比出需要更新的包列表
+        /// <summary>
+        /// 从服务器得到资源列表并对比出需要更新的包列表
+        /// </summary>
+        /// <param name="ev">检查完成后回调函数</param>
+        /// <returns></returns>
         IEnumerator AsyncCheckDownloadingList(ProcessCompleteEvent ev)
         {
-            if (Application.isMobilePlatform)
+            //读取本地的idx和apk里的idx文件
+            Dictionary<string, BundleItem> localBundlesDict = new Dictionary<string, BundleItem>();
+            string localIndexPath = ResUtils.BundleRootPath + ResUtils.BundleIndexFileName;
+
+            if (!File.Exists(localIndexPath))
             {
-                //读取本地的idx和apk里的idx文件
-                Dictionary<string, BundleItem> localBundlesDict = new Dictionary<string, BundleItem>();
-                Dictionary<string, BundleItem> apkBundlesDict = new Dictionary<string, BundleItem>();
-                string persistPath = Application.persistentDataPath + "/AssetBundles/";
-                string localIndexPath = persistPath + m_IndexFileName;
+                UnityEngine.Debug.Log("local idx not found, try copy from default");
+                Directory.CreateDirectory(ResUtils.BundleRootPath);
+                var txt = Resources.Load(ResUtils.BundleIndexFileName.Substring(ResUtils.BundleIndexFileName.IndexOf('.'))) as TextAsset;
+                if (txt != null)
+                    File.WriteAllText(ResUtils.BundleRootPath + ResUtils.BundleIndexFileName, txt.text);
+            }
 
-                if (File.Exists(localIndexPath))
+            if (File.Exists(localIndexPath))
+            {
+                string indexContent = File.ReadAllText(localIndexPath);
+                if (indexContent != null)
                 {
-                    string indexContent = File.ReadAllText(localIndexPath);
-                    if (indexContent != null)
-                    {
-                        IdxFile file = new IdxFile();
-                        List<BundleItem> list = file.Load(indexContent);
-                        foreach (var v in list)
-                        {
-                            localBundlesDict[v.m_Name] = v;
-                        }
-                    }
-                }
-                else
-                {
-                    UnityEngine.Debug.Log("local idx not found");
-                }
-
-                WWW www = null;
-                string apkIndexPath = "jar:file://" + Application.dataPath + "!/assets/AssetBundle/" + m_IndexFileName;
-                www = new WWW(apkIndexPath);
-                yield return www;
-                if (www.error == null)
-                {
-                    string indexContent = www.text;
                     IdxFile file = new IdxFile();
                     List<BundleItem> list = file.Load(indexContent);
                     foreach (var v in list)
                     {
-                        apkBundlesDict[v.m_Name] = v;
+                        localBundlesDict[v.m_Name] = v;
                     }
-                }
-                else
-                {
-                    UnityEngine.Debug.Log("apk idx read error " + www.error);
-                }
-
-                UnityEngine.Debug.LogFormat("local bundles dict count {0}, apk bundles dict count {1} ", localBundlesDict.Count, apkBundlesDict.Count);
-
-                //下载网上的idx文件
-                www = new WWW(m_HttpAddress + ResUtils.BundleName + "/" + m_IndexFileName);
-                yield return www;
-                if (www.error != null)
-                    UnityEngine.Debug.Log("remote idx read error " + www.error);
-
-                m_DownloadingList.Clear();
-
-                if (www.error == null)
-                {
-                    m_NewIndexContent = www.text;
-                    IdxFile file = new IdxFile();
-                    List<BundleItem> list = file.Load(m_NewIndexContent);
-                    foreach (var v in list)
-                    {
-                        int localVer = 0;
-                        int apkVer = 0;
-                        int netVer = v.m_Version;
-                        BundleItem apkItem = null;
-                        BundleItem localItem = null;
-                        if (apkBundlesDict.TryGetValue(v.m_Name, out apkItem))
-                            apkVer = apkItem.m_Version;
-                        if (localBundlesDict.TryGetValue(v.m_Name, out localItem))
-                            localVer = localItem.m_Version;
-
-                        if (netVer > apkVer && netVer > localVer)
-                        { //网上的资源较新则重新下载到本地
-                            m_DownloadingList.Add(v);
-                        }
-                        else if (localVer <= apkVer)
-                        { //apk里的资源比较新，则无需下载网上资源，并且要删除本地的资源，这样就可以让后续读取apk里的资源
-                            if (File.Exists(persistPath + v.m_Name))
-                            {
-                                File.Delete(persistPath + v.m_Name);
-                            }
-                        } //其他情况是本地的资源较新，这也无需从网上下载，保持从本地读取即可
-                    }
-
-                    UnityEngine.Debug.LogFormat("download idx file success! new bundles count {0}, downloading {1}", list.Count, m_DownloadingList.Count);
-                }
-                else
-                {
-                    UnityEngine.Debug.LogFormat("download idx file error! {0}", www.error);
                 }
             }
             else
             {
-                yield return new WaitForSeconds(1);
+                UnityEngine.Debug.LogWarning("local idx not found");
+            }
+
+            //下载网上的idx文件
+            WWW www = new WWW(mHttpAddress + ResUtils.GetBundleManifestName(Application.platform) + "/" + ResUtils.BundleIndexFileName);
+            yield return www;
+
+            if (www.error != null)
+                UnityEngine.Debug.Log("remote idx read error " + www.error);
+
+            mDownloadingList.Clear();
+
+            if (www.error == null)
+            {
+                mNewIndexContent = www.text;
+                IdxFile file = new IdxFile();
+                List<BundleItem> list = file.Load(mNewIndexContent);
+                foreach (var v in list)
+                {
+                    string localHash = null;
+                    string netHash = v.m_HashCode;
+                    BundleItem localItem = null;
+                    if (localBundlesDict.TryGetValue(v.m_Name, out localItem))
+                        localHash = localItem.m_HashCode;
+
+                    if (localHash != netHash)
+                        mDownloadingList.Add(v); //网上的资源较新则需要重新下载到本地
+                }
+
+                UnityEngine.Debug.LogFormat("download idx file success! new bundles count {0}, downloading {1}", list.Count, mDownloadingList.Count);
+            }
+            else
+            {
+                UnityEngine.Debug.LogFormat("download idx file error! {0}", www.error);
             }
 
             ev?.Invoke();
@@ -209,52 +196,49 @@ namespace U3DUtility
             yield return null;
         }
 
+        /// <summary>
+        /// 异步下载需要更新的资源
+        /// </summary>
+        /// <param name="ev">下载完成回调函数</param>
+        /// <returns></returns>
         IEnumerator AsyncDownloading(ProcessCompleteEvent ev)
         {
-            if (Application.isMobilePlatform)
+            mTotalDownloadBytes = 0;
+            mCurrentDownloadIdx = 0;
+            mAlreadyDownloadBytes = 0;
+            foreach (var v in mDownloadingList)
             {
-                m_TotalDownloadBytes = 0;
-                m_CurrentDownloadIdx = 0;
-                m_AlreadyDownloadBytes = 0;
-                foreach (var v in m_DownloadingList)
-                {
-                    m_TotalDownloadBytes += v.m_FileSize;
-                }
-
-                string persistPath = Application.persistentDataPath + "/AssetBundles/";
-                foreach (var v in m_DownloadingList)
-                {
-                    string url = m_HttpAddress + ResUtils.BundleName + "/" + v.m_Name;
-                    UnityEngine.Debug.LogFormat("downloading {0} size {1}", v.m_Name, v.m_FileSize);
-                    WWW www = new WWW(url);
-                    m_www = www;
-                    yield return www;
-                    if (www.error == null)
-                    {
-                        string fileName = persistPath + v.m_Name;
-                        string dir = fileName.Substring(0, fileName.LastIndexOf('/'));
-                        Directory.CreateDirectory(dir);
-                        File.WriteAllBytes(fileName, www.bytes);
-                    }
-                    else
-                    {
-                        UnityEngine.Debug.LogErrorFormat("downloading {0} error {1}", v.m_Name, www.error);
-                    }
-                    m_AlreadyDownloadBytes += v.m_FileSize;
-                    m_CurrentDownloadIdx++;
-                }
-
-                //全部下载成功后，再写入索引文件
-                Directory.CreateDirectory(persistPath);
-                if (m_NewIndexContent != null)
-                {
-                    File.WriteAllText(persistPath + m_IndexFileName, m_NewIndexContent);
-                    m_NewIndexContent = null;
-                }
+                mTotalDownloadBytes += v.m_FileSize;
             }
-            else
+
+            foreach (var v in mDownloadingList)
             {
-                yield return new WaitForSeconds(1);
+                string url = mHttpAddress + ResUtils.GetBundleManifestName(Application.platform) + "/" + v.m_Name;
+                UnityEngine.Debug.LogFormat("downloading {0} size {1}", v.m_Name, v.m_FileSize);
+                WWW www = new WWW(url);
+                mWWW = www;
+                yield return www;
+                if (www.error == null)
+                {
+                    string fileName = ResUtils.BundleRootPath + v.m_Name;
+                    string dir = fileName.Substring(0, fileName.LastIndexOf('/'));
+                    Directory.CreateDirectory(dir);
+                    File.WriteAllBytes(fileName, www.bytes);
+                }
+                else
+                {
+                    UnityEngine.Debug.LogErrorFormat("downloading {0} error {1}", v.m_Name, www.error);
+                }
+                mAlreadyDownloadBytes += v.m_FileSize;
+                mCurrentDownloadIdx++;
+            }
+
+            //全部下载成功后，再覆盖写入索引文件
+            Directory.CreateDirectory(ResUtils.BundleRootPath);
+            if (mNewIndexContent != null)
+            {
+                File.WriteAllText(ResUtils.BundleRootPath + ResUtils.BundleIndexFileName, mNewIndexContent);
+                mNewIndexContent = null;
             }
 
             ev?.Invoke();
@@ -262,24 +246,42 @@ namespace U3DUtility
             yield return null;
         }
 
+        /// <summary>
+        /// 从bundle中异步加载lua文件
+        /// </summary>
+        /// <param name="ev">加载完毕后回调</param>
+        /// <returns></returns>
         IEnumerator AsyncLoadLua(ProcessCompleteEvent ev)
         {
-            if (Application.isMobilePlatform)
+            string luaDir = ResUtils.BundleRootPath + "lua/";
+            DirectoryInfo dir = new DirectoryInfo(luaDir);
+            var files = dir.GetFiles("*", SearchOption.AllDirectories);
+            for (var i = 0; i < files.Length; ++i)
             {
-                AssetBundleInfo bundleInfo = new AssetBundleInfo(AssetBundle.LoadFromFile(ResUtils.GetBundleFilePath("lua.unity3d")));
-                AssetBundleRequest request = bundleInfo.m_AssetBundle.LoadAllAssetsAsync();
+                var fileInfo = files[i];
+
+                string ext = fileInfo.Extension.ToLower();
+                if (ext != ResUtils.BundleExtension)
+                    continue;
+
+                AssetBundle bundle = AssetBundle.LoadFromFile(fileInfo.FullName);
+                if (bundle == null)
+                    continue;
+
+                AssetBundleRequest request = bundle.LoadAllAssetsAsync();
                 yield return request;
-                var list = request.allAssets;
-                TextAsset text = null;
-                foreach (var assetObj in list)
-                {
-                    text = assetObj as TextAsset;
-                    if (text)
-                    {
-                        string name = text.name.Remove(text.name.LastIndexOf('.'));
-                        m_LuaTables[name] = text.bytes;
-                    }
-                }
+
+                if (request.allAssets.Length == 0)
+                    continue;
+
+                var text = request.allAssets[0] as TextAsset;
+                if (text == null)
+                    continue;
+
+                string name = fileInfo.FullName.Substring(luaDir.Length);
+                name = name.Remove(name.LastIndexOf('.')); //去掉.unity3d
+                name = name.Remove(name.LastIndexOf('.')); //去掉.lua
+                mLuaTables[name] = text.bytes;
             }
 
             ev?.Invoke();
@@ -290,14 +292,14 @@ namespace U3DUtility
         internal byte[] GetLuaBytes(string name)
         {
             var subName = name.Substring(name.LastIndexOf('/') + 1);
-            if (m_LuaTables.ContainsKey(subName))
+            if (mLuaTables.ContainsKey(subName))
             {
-                return m_LuaTables[subName];
+                return mLuaTables[subName];
             }
 
-            if (m_LuaTables.ContainsKey(name))
+            if (mLuaTables.ContainsKey(name))
             {
-                return m_LuaTables[name];
+                return mLuaTables[name];
             }
 
             TextAsset txtAsset = Resources.Load<TextAsset>("Lua/" + name + ".lua");

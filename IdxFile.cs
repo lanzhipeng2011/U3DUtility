@@ -83,15 +83,7 @@ namespace U3DUtility
             return list;
         }
 
-        static public int GetFileSize(string filename)
-        {
-            FileInfo file = new FileInfo(filename);
-            if (file == null)
-                return 0;
-            return (int)file.Length;
-        }
-
-        static public string Save(List<BundleItem> list, string path)
+        static public string SaveString(List<BundleItem> list, string path)
         {
             StringBuilder sb = new StringBuilder();
             foreach (var v in list)
@@ -101,10 +93,8 @@ namespace U3DUtility
                 sb.Append(v.m_Version);
                 sb.Append('\t');
                 sb.Append(v.m_HashCode);
-
                 sb.Append('\t');
-                // get file size
-                sb.Append(GetFileSize(path + v.m_Name));
+                sb.Append(v.m_FileSize);
                 sb.Append("\r\n");
             }
             return sb.ToString();

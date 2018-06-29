@@ -5,6 +5,7 @@ using System.Text;
 using System.IO;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using System.Security.Cryptography;
 
 namespace U3DUtility
 {
@@ -13,42 +14,80 @@ namespace U3DUtility
     /// </summary>
     public class ResUtils
     {
-        static string DATA_ROOT_PATH = string.Format("{0}/", Application.streamingAssetsPath);
+        public static string BundleExtension = "unity3d"; //打包资源扩展名
 
-        public static string BundleName
+        public static string BundleIndexFileName = "list.txt"; //打包资源的索引文件
+
+        public static string BundleRootDirName = "AssetBundles"; //打包文件所在的根目录名
+
+        public static string BundleRootPath = Application.persistentDataPath + "/" + ResUtils.BundleRootDirName + "/";
+
+        /// <summary>
+        /// 根据平台不同获取打包依赖关系文件名
+        /// </summary>
+        /// <param name="plat"></param>
+        /// <returns></returns>
+        public static string GetBundleManifestName(RuntimePlatform plat)
         {
-            get
+            if (plat == RuntimePlatform.WindowsEditor || plat == RuntimePlatform.WindowsPlayer)
             {
-                RuntimePlatform plat = Application.platform;
-
-                if (plat == RuntimePlatform.WindowsEditor || plat == RuntimePlatform.WindowsPlayer)
-                {
-                    return "Windows";
-                }
-                else if (plat == RuntimePlatform.Android)
-                {
-                    return "Android";
-                }
-                else if (plat == RuntimePlatform.IPhonePlayer)
-                {
-                    return "IOS";
-                }
-                else
-                {
-                    return "Windows";
-                }
+                return "Windows";
+            }
+            else if (plat == RuntimePlatform.Android)
+            {
+                return "Android";
+            }
+            else if (plat == RuntimePlatform.IPhonePlayer)
+            {
+                return "IOS";
+            }
+            else
+            {
+                return "Windows";
             }
         }
 
         /// <summary>
-        /// Bundle 文件发布后优先在PersistPath读取，如果没有则从streamingAsset中读取
+        /// 获取文件的大小
         /// </summary>
-        /// <param name="fileName"></param>
+        /// <param name="filePath"></param>
         /// <returns></returns>
-        public static string GetBundleFilePath(string fileName)
+        public static int GetFileSize(string filePath)
         {
-            string filePath = Application.persistentDataPath + "/AssetBundles/" + fileName;
-            return filePath;
+            FileInfo file = new FileInfo(filePath);
+            if (file == null)
+                return 0;
+            return (int)file.Length;
+        }
+
+        /// <summary>
+        /// 获得文件的md5 hash值
+        /// </summary>
+        /// <param name="filePath">文件路径</param>
+        /// <returns></returns>
+        public static string GetFileHash(string filePath)
+        {
+            try
+            {
+                FileStream fs = new FileStream(filePath, FileMode.Open);
+                int len = (int)fs.Length;
+                byte[] data = new byte[len];
+                fs.Read(data, 0, len);
+                fs.Close();
+                MD5 md5 = new MD5CryptoServiceProvider();
+                byte[] result = md5.ComputeHash(data);
+                string fileMD5 = "";
+                foreach (byte b in result)
+                {
+                    fileMD5 += Convert.ToString(b, 16);
+                }
+                return fileMD5;
+            }
+            catch (FileNotFoundException e)
+            {
+                Debug.LogError("can not open file for md5 hash " + e.FileName);
+                return "";
+            }
         }
     }
 
@@ -57,51 +96,55 @@ namespace U3DUtility
     /// </summary>
     public class ResManager
     {
-        AssetBundleManifest m_AssetBundleManifest;
-        Dictionary<string, AssetBundle> m_LoadedAssetBundles = new Dictionary<string, AssetBundle>();
-        static Dictionary<string, string[]> m_Dependencies = new Dictionary<string, string[]>();
-        string[] m_Variants = { };
-
-        static ResManager m_Singleton;
-        public static ResManager Singleton
+        private sealed class AssetBundleInfo
         {
-            get
-            {
-                if (m_Singleton == null)
-                {
-                    m_Singleton = new ResManager();
-                }
+            public readonly AssetBundle mAssetBundle;
+            public int mReferencedCount;
 
-                return m_Singleton;
+            public AssetBundleInfo(AssetBundle assetBundle)
+            {
+                mAssetBundle = assetBundle;
+                mReferencedCount = 1;
             }
         }
 
+        private AssetBundleManifest mAssetBundleManifest;
+        //保存已经加载过的包信息，键值为包文件的相对路径名例如：subdir/res1.prefab.unity3d
+        private Dictionary<string, AssetBundleInfo> mLoadedAssetBundles = new Dictionary<string, AssetBundleInfo>();
+        private static ResManager mSingleton;
+
+        public static ResManager singleton
+        {
+            get
+            {
+                if (mSingleton == null)
+                {
+                    mSingleton = new ResManager();
+                }
+
+                return mSingleton;
+            }
+        }
+
+        /// <summary>
+        /// 根据lua文件路径获得lua的字节流
+        /// </summary>
+        /// <param name="name"></param>
+        /// <returns></returns>
         public byte[] GetLuaBytes(string name)
         {
             name = name.Replace(".", "/");
-            if (Application.isMobilePlatform)
-            {
-                return UpdateManager.Singleton.GetLuaBytes(name);
-            }
-            else
-            {
-                TextAsset txtAsset = Resources.Load<TextAsset>("Lua/" + name + ".lua");
-                if (txtAsset != null)
-                {
-                    return txtAsset.bytes;
-                }
-            }
 
-            return null;
+            return UpdateManager.singleton.GetLuaBytes(name);
         }
 
         /// <summary>
         /// 动态加载资源统一接口，如果从bundle里读取不到则从本地包中读取
         /// </summary>
-        /// <param name="assetPath">资源路径，相对于Resources目录</param>
-        /// <param name="type"></param>
-        /// <returns></returns>
-        public UnityEngine.Object LoadAsset(string assetPath, System.Type type)
+        /// <param name="assetPath">资源路径，相对于Resources目录，例如 subdir/res1 </param>
+        /// <param name="type">资源的类型，例如typeof(GameObject)</param>
+        /// <returns>加载好的资源对象</returns>
+        public UnityEngine.Object LoadAsset(string assetPath, Type type)
         {
             assetPath = CheckAssetPath(assetPath, type);
             if (assetPath == null)
@@ -109,13 +152,10 @@ namespace U3DUtility
                 return null;
             }
 
-            if (Application.isMobilePlatform)
+            UnityEngine.Object obj = LoadAssetFromBundle(assetPath, type);
+            if (obj != null)
             {
-                UnityEngine.Object obj = LoadAssetFromBundle(assetPath, type);
-                if (obj != null)
-                {
-                    return obj;
-                }
+                return obj;
             }
 
             string path = assetPath.Remove(assetPath.LastIndexOf('.'));
@@ -127,17 +167,23 @@ namespace U3DUtility
         /// </summary>
         public void CleanAllAsset()
         {
-            foreach (var v in m_LoadedAssetBundles)
+            foreach (var v in mLoadedAssetBundles)
             {
-                v.Value.Unload(false);
+                v.Value.mAssetBundle.Unload(false);
             }
 
-            m_LoadedAssetBundles.Clear();
+            mLoadedAssetBundles.Clear();
 
             Resources.UnloadUnusedAssets();
         }
 
-        string CheckAssetPath(string assetPath, System.Type type)
+        /// <summary>
+        /// 检查资源路径，返回合理的资源路径，主要是给尾部添加资源扩展名
+        /// </summary>
+        /// <param name="assetPath">需检查的资源路径</param>
+        /// <param name="type">资源类型</param>
+        /// <returns>新的资源路径</returns>
+        private string CheckAssetPath(string assetPath, System.Type type)
         {
             if (type == typeof(Material))
             {
@@ -172,142 +218,110 @@ namespace U3DUtility
             return assetPath;
         }
 
-        static string DataPath
+        /// <summary>
+        /// 从AB包里加载资源
+        /// </summary>
+        /// <param name="assetPath">资源路径，例如 subdir/res1.prefab </param>
+        /// <param name="type">资源类型</param>
+        /// <returns>加载好的资源对象</returns>
+        private UnityEngine.Object LoadAssetFromBundle(string assetPath, Type type)
         {
-            get
+            //检查依赖关系是否加载，如果没有则加载
+            if (mAssetBundleManifest == null)
             {
-                return Application.persistentDataPath + "/AssetBundle/";
-            }
-        }
-
-        UnityEngine.Object LoadAssetFromBundle(string assetPath, System.Type type)
-        {
-            if (m_AssetBundleManifest == null)
-            {
-                AssetBundle manifestBundle = AssetBundle.LoadFromFile(DataPath + ResUtils.BundleName);
+                AssetBundle manifestBundle = AssetBundle.LoadFromFile(ResUtils.BundleRootPath + ResUtils.GetBundleManifestName(Application.platform));
                 if (manifestBundle == null)
                 {
                     return null;
                 }
 
-                m_AssetBundleManifest = manifestBundle.LoadAsset("AssetBundleManifest", typeof(AssetBundleManifest)) as AssetBundleManifest;
-                if (m_AssetBundleManifest == null)
+                mAssetBundleManifest = manifestBundle.LoadAsset("AssetBundleManifest", typeof(AssetBundleManifest)) as AssetBundleManifest;
+                if (mAssetBundleManifest == null)
                 {
                     return null;
                 }
             }
 
+            //获取资源在包内部的名字，这个名字没有路径，但有扩展名，例如 res1.prefab
             string assetName = assetPath.Substring(assetPath.LastIndexOf("/") + 1).ToLower();
-            string bundleName = assetName + ".unity3d";
 
-            AssetBundle bundleInfo = null;
-            if (m_LoadedAssetBundles.TryGetValue(bundleName, out bundleInfo))
+            //得到bundle文件的相对路径名，例如 subdir/res1.prefab.unity3d
+            string bundleFileName = assetPath + '.' + ResUtils.BundleExtension;
+
+            AssetBundleInfo bundleInfo = null;
+            if (mLoadedAssetBundles.TryGetValue(bundleFileName, out bundleInfo))
             {
-                if (!bundleInfo.isStreamedSceneAssetBundle)
+                bundleInfo.mReferencedCount++;
+
+                if (!bundleInfo.mAssetBundle.isStreamedSceneAssetBundle)
                 {
-                    UnityEngine.Object obj = bundleInfo.LoadAsset(assetName, type);
+                    UnityEngine.Object obj = bundleInfo.mAssetBundle.LoadAsset(assetName, type);
                     return obj;
                 }
                 else
                 {
-                    return null;
+                    return null; //场景包不需要加载资源，返回即可
                 }
             }
             else
             {
-                AssetBundle bundle = LoadAssetBundle(bundleName);
-                if (!bundle.isStreamedSceneAssetBundle)
+                LoadDependencies(bundleFileName);
+
+                bundleInfo = LoadAssetBundleSingle(bundleFileName);
+
+                if (bundleInfo != null && !bundleInfo.mAssetBundle.isStreamedSceneAssetBundle)
                 {
-                    UnityEngine.Object obj = bundle.LoadAsset(assetName, type);
+                    UnityEngine.Object obj = bundleInfo.mAssetBundle.LoadAsset(assetName, type);
                     return obj;
                 }
-                return null;
-            }
-        }
-
-        string RemapVariantName(string assetBundleName)
-        {
-            string[] bundlesWithVariant = m_AssetBundleManifest.GetAllAssetBundlesWithVariant();
-            if (System.Array.IndexOf(bundlesWithVariant, assetBundleName) < 0)
-            {
-                return assetBundleName;
-            }
-
-            string[] split = assetBundleName.Split('.');
-
-            int bestFit = int.MaxValue;
-            int bestFitIndex = -1;
-            // Loop all the assetBundles with variant to find the best fit variant assetBundle.
-            for (int i = 0; i < bundlesWithVariant.Length; i++)
-            {
-                string[] curSplit = bundlesWithVariant[i].Split('.');
-                if (curSplit[0] != split[0])
-                    continue;
-
-                int found = System.Array.IndexOf(m_Variants, curSplit[1]);
-                if (found != -1 && found < bestFit)
+                else
                 {
-                    bestFit = found;
-                    bestFitIndex = i;
+                    return null; //场景包不需要加载资源，返回即可
                 }
             }
-            if (bestFitIndex != -1)
-            {
-                return bundlesWithVariant[bestFitIndex];
-            }
-            else
-            {
-                return assetBundleName;
-            }
         }
 
-        private AssetBundle LoadAssetBundle(string assetBundleName)
+        /// <summary>
+        /// 加载一个包文件依赖的所有包文件
+        /// </summary>
+        /// <param name="assetBundleName">包文件名称</param>
+        private void LoadDependencies(string assetBundleName)
         {
-            assetBundleName = RemapVariantName(assetBundleName);
-
-            AssetBundle bundle = null;
-            if (m_LoadedAssetBundles.TryGetValue(assetBundleName, out bundle))
-            {
-                return bundle;
-            }
-
-            LoadDependencies(assetBundleName);
-            bundle = LoadAssetBundleSingle(assetBundleName);
-            return bundle;
-        }
-
-        AssetBundle LoadAssetBundleSingle(string assetBundleName)
-        {
-            AssetBundle bundleInfo = null;
-            if (m_LoadedAssetBundles.TryGetValue(assetBundleName, out bundleInfo))
-            {
-                return bundleInfo;
-            }
-
-            string uri = DataPath + assetBundleName;
-            AssetBundle bundle = AssetBundle.LoadFromFile(uri);
-            m_LoadedAssetBundles.Add(assetBundleName, bundleInfo);
-            return bundleInfo;
-        }
-
-        void LoadDependencies(string assetBundleName)
-        {
-            string[] dependencies = m_AssetBundleManifest.GetAllDependencies(assetBundleName);
+            string[] dependencies = mAssetBundleManifest.GetAllDependencies(assetBundleName);
             if (dependencies.Length == 0)
             {
                 return;
             }
 
-            for (int i = 0, n = dependencies.Length; i < n; i++)
-            {
-                dependencies[i] = RemapVariantName(dependencies[i]);
-            }
-            m_Dependencies.Add(assetBundleName, dependencies);
-
-            for (int i = 0, n = dependencies.Length; i < n; i++)
+            for (int i = 0; i < dependencies.Length; i++)
             {
                 LoadAssetBundleSingle(dependencies[i]);
             }
         }
+
+        /// <summary>
+        /// 加载单独的包文件，不加载其依赖的包文件
+        /// </summary>
+        /// <param name="assetBundleName">包文件名</param>
+        /// <returns>加载好的包</returns>
+        private AssetBundleInfo LoadAssetBundleSingle(string assetBundleName)
+        {
+            AssetBundleInfo bundleInfo = null;
+            if (mLoadedAssetBundles.TryGetValue(assetBundleName, out bundleInfo))
+            {
+                return bundleInfo;
+            }
+
+            string uri = ResUtils.BundleRootPath + assetBundleName;
+            AssetBundle bundle = AssetBundle.LoadFromFile(uri);
+            if (bundle != null)
+            {
+                bundleInfo = new AssetBundleInfo(bundle);
+                mLoadedAssetBundles.Add(assetBundleName, bundleInfo);
+            }
+            
+            return bundleInfo;
+        }
+
     }
 }
