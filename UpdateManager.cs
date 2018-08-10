@@ -12,9 +12,9 @@ namespace U3DUtility
     {
         enum UpdateStage
         {
-            CheckDownloadIndex,
-            Downloading,
-            LoadLuaScript,
+            CheckDownloadIndex, //下载并检查索引文件，生成下载列表
+            Downloading,        //下载需要更新的资源包
+            LoadLuaScript,      //加载Lua资源包
         }
 
         public delegate void ProcessCompleteEvent();
@@ -131,7 +131,7 @@ namespace U3DUtility
             Dictionary<string, BundleItem> localBundlesDict = new Dictionary<string, BundleItem>();
             string localIndexPath = ResUtils.BundleRootPath + ResUtils.BundleIndexFileName;
 
-            if (!File.Exists(localIndexPath))
+            if (!File.Exists(localIndexPath)) //如果P目录里没有索引文件，去Resources里拷贝一份到P目录
             {
                 UnityEngine.Debug.Log("local idx not found, try copy from default");
                 Directory.CreateDirectory(ResUtils.BundleRootPath);
@@ -171,8 +171,8 @@ namespace U3DUtility
             {
                 mNewIndexContent = www.text;
                 IdxFile file = new IdxFile();
-                List<BundleItem> list = file.Load(mNewIndexContent);
-                foreach (var v in list)
+                List<BundleItem> listServer = file.Load(mNewIndexContent);
+                foreach (var v in listServer)
                 {
                     string localHash = null;
                     string netHash = v.m_HashCode;
@@ -184,7 +184,7 @@ namespace U3DUtility
                         mDownloadingList.Add(v); //网上的资源较新则需要重新下载到本地
                 }
 
-                UnityEngine.Debug.LogFormat("download idx file success! new bundles count {0}, downloading {1}", list.Count, mDownloadingList.Count);
+                UnityEngine.Debug.LogFormat("download idx file success! new bundles count {0}, downloading {1}", listServer.Count, mDownloadingList.Count);
             }
             else
             {

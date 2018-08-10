@@ -152,10 +152,13 @@ namespace U3DUtility
                 return null;
             }
 
-            UnityEngine.Object obj = LoadAssetFromBundle(assetPath, type);
-            if (obj != null)
+            if (Application.platform != RuntimePlatform.WindowsEditor)
             {
-                return obj;
+                UnityEngine.Object obj = LoadAssetFromBundle(assetPath, type);
+                if (obj != null)
+                {
+                    return obj;
+                }
             }
 
             string path = assetPath.Remove(assetPath.LastIndexOf('.'));
